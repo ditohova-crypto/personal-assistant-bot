@@ -1,76 +1,44 @@
-import { z } from "zod";
-import { eq, and } from "drizzle-orm";
-import { createRouter, authedQuery } from "./middleware";
-import { getDb } from "./queries/connection";
-import { reminderSettings, tasks } from "../db/schema";
+import { Hono } from "hono";
+import { bodyLimit } from "hono/body-limit";
+import type { HttpBindings } from "@hono/node-server";
+import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
+import { appRouter } from "./router";
+import { createContext } from "./context";
+import { env } from "./lib/env";
+import { createOAuthCallbackHandler } from "./kimi/auth";
+import { Paths } from "@contracts/constants";
+import { telegramBotService } from "./telegram-bot";
+import { startReminderCron } from "./reminder-cron";
 
-export const reminderRouter = createRouter({
-  getSettings: authedQuery.query(async ({ ctx }) => {
-    const db = getDb();
-    const [settings] = await db
-      .select()
-      .from(reminderSettings)
-      .where(eq(reminderSettings.userId, ctx.user.id));
-    return settings || null;
-  }),
+const app = new Hono<{ Bindings: HttpBindings }>();
 
-  updateSettings: authedQuery
-    .input(
-      z.object({
-        morningTime: z.string().regex(/^([0-1]?\d|2[0-3]):[0-5]\d$/).optional(),
-        afternoonTime: z.string().regex(/^([0-1]?\d|2[0-3]):[0-5]\d$/).optional(),
-        eveningTime: z.string().regex(/^([0-1]?\d|2[0-3]):[0-5]\d$/).optional(),
-        morningEnabled: z.boolean().optional(),
-        afternoonEnabled: z.boolean().optional(),
-        eveningEnabled: z.boolean().optional(),
-        timezone: z.string().max(50).optional(),
-      })
-    )
-    .mutation(async ({ ctx, input }) => {
-      const db = getDb();
-      const [existing] = await db
-        .select()
-        .from(reminderSettings)
-        .where(eq(reminderSettings.userId, ctx.user.id));
-
-      if (existing) {
-        await db
-          .update(reminderSettings)
-          .set(input)
-          .where(eq(reminderSettings.id, existing.id));
-        const [updated] = await db
-          .select()
-          .from(reminderSettings)
-          .where(eq(reminderSettings.id, existing.id));
-        return updated;
-      } else {
-        const [created] = await db
-          .insert(reminderSettings)
-          .values({
-            userId: ctx.user.id,
-            ...input,
-          });
-        return created;
-      }
-    }),
-
-  getTasksForReminder: authedQuery
-    .input(z.object({ type: z.enum(["morning", "afternoon", "evening"]) }))
-    .query(async ({ ctx, input }) => {
-      const db = getDb();
-      const userTasks = await db
-        .select()
-        .from(tasks)
-        .where(
-          and(
-            eq(tasks.userId, ctx.user.id),
-            eq(tasks.status, "pending")
-          )
-        );
-      return {
-        type: input.type,
-        count: userTasks.length,
-        tasks: userTasks,
-      };
-    }),
+app.use(bodyLimit({ maxSize: 50 * 1024 * 1024 }));
+app.get(Paths.oauthCallback, createOAuthCallbackHandler());
+app.use("/api/trpc/*", async (c) => {
+  return fetchRequestHandler({
+    endpoint: "/api/trpc",
+    req: c.req.raw,
+    router: appRouter,
+    createContext,
+  });
 });
+app.all("/api/*", (c) => c.json({ error: "Not Found" }, 404));
+
+// Start Telegram bot and reminders
+if (env.isProduction) {
+  telegramBotService.start().catch(console.error);
+  startReminderCron();
+}
+
+export default app;
+
+if (env.isProduction) {
+  const { serve } = await import("@hono/node-server");
+  const { serveStaticFiles } = await import("./lib/vite");
+  serveStaticFiles(app);
+
+  const port = parseInt(process.env.PORT || "3000");
+  serve({ fetch: app.fetch, port }, () => {
+    console.log(`Server running on http://localhost:${port}/`);
+  });
+}

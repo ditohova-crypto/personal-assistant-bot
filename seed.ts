@@ -1,17 +1,17 @@
-import { getDb } from "../api/queries/connection";
-// TODO: import tables from "./schema"
+import type { CookieOptions } from "hono/utils/cookie";
 
-async function seed() {
-  const db = getDb();
-  console.log("Seeding database...");
-
-  // TODO: insert seed data, e.g.
-  // await db.insert(schema.posts).values([
-  //   { title: "First post", content: "Hello world" },
-  // ]);
-
-  console.log("Done.");
-  process.exit(0); // close MySQL connection pool
+function isLocalhost(headers: Headers): boolean {
+  const host = headers.get("host") || "";
+  return host.startsWith("localhost:") || host.startsWith("127.0.0.1:");
 }
 
-seed();
+export function getSessionCookieOptions(headers: Headers): CookieOptions {
+  const localhost = isLocalhost(headers);
+
+  return {
+    httpOnly: true,
+    path: "/",
+    sameSite: localhost ? "Lax" : "None",
+    secure: !localhost,
+  };
+}

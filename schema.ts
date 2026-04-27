@@ -1,91 +1,77 @@
-import {
-  mysqlTable,
-  mysqlEnum,
-  serial,
-  varchar,
-  text,
-  timestamp,
-  bigint,
-  boolean,
-} from "drizzle-orm/mysql-core";
+interface RequestConfig extends RequestInit {
+  baseUrl?: string;
+  params?: Record<string, string | number>;
+  timeout?: number;
+}
 
-export const users = mysqlTable("users", {
-  id: serial("id").primaryKey(),
-  unionId: varchar("unionId", { length: 255 }).notNull().unique(),
-  name: varchar("name", { length: 255 }),
-  email: varchar("email", { length: 320 }),
-  avatar: text("avatar"),
-  role: mysqlEnum("role", ["user", "admin"]).default("user").notNull(),
-  createdAt: timestamp("createdAt").defaultNow().notNull(),
-  updatedAt: timestamp("updatedAt")
-    .defaultNow()
-    .notNull()
-    .$onUpdate(() => new Date()),
-  lastSignInAt: timestamp("lastSignInAt").defaultNow().notNull(),
-});
+export class HttpClient {
+  private baseUrl: string;
+  private defaultHeaders: Record<string, string>;
 
-export type User = typeof users.$inferSelect;
-export type InsertUser = typeof users.$inferInsert;
+  constructor(baseURL: string, opts?: { headers?: Record<string, string> }) {
+    this.baseUrl = baseURL;
+    this.defaultHeaders = {
+      "Content-Type": "application/json",
+      ...opts?.headers,
+    };
+  }
 
-export const telegramUsers = mysqlTable("telegram_users", {
-  id: serial("id").primaryKey(),
-  userId: bigint("user_id", { mode: "number", unsigned: true }).notNull().references(() => users.id),
-  telegramId: bigint("telegram_id", { mode: "number", unsigned: true }).notNull().unique(),
-  telegramUsername: varchar("telegram_username", { length: 255 }),
-  botToken: varchar("bot_token", { length: 255 }).notNull(),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-  updatedAt: timestamp("updated_at").defaultNow().notNull().$onUpdate(() => new Date()),
-});
+  async request<T>(endpoint: string, config: RequestConfig = {}): Promise<T> {
+    const {
+      method = "GET",
+      params,
+      body,
+      headers,
+      timeout = 30000,
+      ...rest
+    } = config;
 
-export type TelegramUser = typeof telegramUsers.$inferSelect;
+    const url = new URL(`${this.baseUrl}${endpoint}`);
+    if (params) {
+      Object.entries(params).forEach(([key, value]) =>
+        url.searchParams.append(key, value.toString()),
+      );
+    }
 
-export const reminderSettings = mysqlTable("reminder_settings", {
-  id: serial("id").primaryKey(),
-  userId: bigint("user_id", { mode: "number", unsigned: true }).notNull().references(() => users.id),
-  morningTime: varchar("morning_time", { length: 5 }).default("08:00").notNull(),
-  afternoonTime: varchar("afternoon_time", { length: 5 }).default("13:00").notNull(),
-  eveningTime: varchar("evening_time", { length: 5 }).default("20:00").notNull(),
-  morningEnabled: boolean("morning_enabled").default(true).notNull(),
-  afternoonEnabled: boolean("afternoon_enabled").default(true).notNull(),
-  eveningEnabled: boolean("evening_enabled").default(true).notNull(),
-  timezone: varchar("timezone", { length: 50 }).default("UTC").notNull(),
-  updatedAt: timestamp("updated_at").defaultNow().notNull().$onUpdate(() => new Date()),
-});
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeout);
 
-export type ReminderSettings = typeof reminderSettings.$inferSelect;
+    try {
+      const response = await fetch(url.toString(), {
+        ...rest,
+        method,
+        headers: { ...this.defaultHeaders, ...headers },
+        body: body ? JSON.stringify(body) : undefined,
+        signal: controller.signal,
+      });
 
-export const tasks = mysqlTable("tasks", {
-  id: serial("id").primaryKey(),
-  userId: bigint("user_id", { mode: "number", unsigned: true }).notNull().references(() => users.id),
-  title: varchar("title", { length: 255 }).notNull(),
-  description: text("description"),
-  status: mysqlEnum("status", ["pending", "in_progress", "completed", "cancelled"]).default("pending").notNull(),
-  priority: mysqlEnum("priority", ["low", "medium", "high"]).default("medium").notNull(),
-  dueDate: timestamp("due_date"),
-  completedAt: timestamp("completed_at"),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-  updatedAt: timestamp("updated_at").defaultNow().notNull().$onUpdate(() => new Date()),
-});
+      clearTimeout(timeoutId);
 
-export type Task = typeof tasks.$inferSelect;
-export type InsertTask = typeof tasks.$inferInsert;
+      if (!response.ok) {
+        const errorData = (await response
+          .json()
+          .catch(() => ({}))) as Record<string, string>;
+        throw new Error(errorData.message || `HTTP Error: ${response.status}`);
+      }
 
-export const chatMessages = mysqlTable("chat_messages", {
-  id: serial("id").primaryKey(),
-  userId: bigint("user_id", { mode: "number", unsigned: true }).notNull().references(() => users.id),
-  role: mysqlEnum("role", ["user", "assistant", "system"]).notNull(),
-  content: text("content").notNull(),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-});
+      return (await response.json()) as T;
+    } catch (error: any) {
+      if (error.name === "AbortError") {
+        throw new Error("Request timeout");
+      }
+      throw error;
+    }
+  }
 
-export type ChatMessage = typeof chatMessages.$inferSelect;
+  get<T>(
+    url: string,
+    params?: RequestConfig["params"],
+    config?: RequestConfig,
+  ) {
+    return this.request<T>(url, { ...config, method: "GET", params });
+  }
 
-export const reminders = mysqlTable("reminders", {
-  id: serial("id").primaryKey(),
-  userId: bigint("user_id", { mode: "number", unsigned: true }).notNull().references(() => users.id),
-  type: mysqlEnum("type", ["morning", "afternoon", "evening"]).notNull(),
-  sentAt: timestamp("sent_at").defaultNow().notNull(),
-  tasksSummary: text("tasks_summary"),
-});
-
-export type Reminder = typeof reminders.$inferSelect;
+  post<T>(url: string, body?: any, config?: RequestConfig) {
+    return this.request<T>(url, { ...config, method: "POST", body });
+  }
+}

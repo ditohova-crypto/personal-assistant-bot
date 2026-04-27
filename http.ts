@@ -1,77 +1,40 @@
-interface RequestConfig extends RequestInit {
-  baseUrl?: string;
-  params?: Record<string, string | number>;
-  timeout?: number;
+import * as jose from "jose";
+import { env } from "../lib/env";
+import type { SessionPayload } from "./types";
+
+const JWT_ALG = "HS256";
+
+export async function signSessionToken(
+  payload: SessionPayload,
+): Promise<string> {
+  const secret = new TextEncoder().encode(env.appSecret);
+  return new jose.SignJWT(payload)
+    .setProtectedHeader({ alg: JWT_ALG })
+    .setIssuedAt()
+    .setExpirationTime("1 year")
+    .sign(secret);
 }
 
-export class HttpClient {
-  private baseUrl: string;
-  private defaultHeaders: Record<string, string>;
-
-  constructor(baseURL: string, opts?: { headers?: Record<string, string> }) {
-    this.baseUrl = baseURL;
-    this.defaultHeaders = {
-      "Content-Type": "application/json",
-      ...opts?.headers,
-    };
+export async function verifySessionToken(
+  token: string,
+): Promise<SessionPayload | null> {
+  if (!token) {
+    console.warn("[session] No token provided for verification.");
+    return null;
   }
-
-  async request<T>(endpoint: string, config: RequestConfig = {}): Promise<T> {
-    const {
-      method = "GET",
-      params,
-      body,
-      headers,
-      timeout = 30000,
-      ...rest
-    } = config;
-
-    const url = new URL(`${this.baseUrl}${endpoint}`);
-    if (params) {
-      Object.entries(params).forEach(([key, value]) =>
-        url.searchParams.append(key, value.toString()),
-      );
+  try {
+    const secret = new TextEncoder().encode(env.appSecret);
+    const { payload } = await jose.jwtVerify(token, secret, {
+      algorithms: [JWT_ALG],
+    });
+    const { unionId, clientId } = payload;
+    if (!unionId || !clientId) {
+      console.warn("[session] JWT payload missing required fields.");
+      return null;
     }
-
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), timeout);
-
-    try {
-      const response = await fetch(url.toString(), {
-        ...rest,
-        method,
-        headers: { ...this.defaultHeaders, ...headers },
-        body: body ? JSON.stringify(body) : undefined,
-        signal: controller.signal,
-      });
-
-      clearTimeout(timeoutId);
-
-      if (!response.ok) {
-        const errorData = (await response
-          .json()
-          .catch(() => ({}))) as Record<string, string>;
-        throw new Error(errorData.message || `HTTP Error: ${response.status}`);
-      }
-
-      return (await response.json()) as T;
-    } catch (error: any) {
-      if (error.name === "AbortError") {
-        throw new Error("Request timeout");
-      }
-      throw error;
-    }
-  }
-
-  get<T>(
-    url: string,
-    params?: RequestConfig["params"],
-    config?: RequestConfig,
-  ) {
-    return this.request<T>(url, { ...config, method: "GET", params });
-  }
-
-  post<T>(url: string, body?: any, config?: RequestConfig) {
-    return this.request<T>(url, { ...config, method: "POST", body });
+    return { unionId, clientId } as SessionPayload;
+  } catch (error) {
+    console.warn("[session] JWT verification failed:", error);
+    return null;
   }
 }

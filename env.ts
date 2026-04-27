@@ -1,19 +1,30 @@
-import "dotenv/config";
+import { env } from "../lib/env";
+import type { UserProfile } from "./types";
 
-function required(name: string): string {
-  const value = process.env[name];
-  if (!value && process.env.NODE_ENV === "production") {
-    throw new Error(`Missing required environment variable: ${name}`);
+async function kimiRequest<T>(
+  path: string,
+  token: string,
+  init?: RequestInit,
+): Promise<T | null> {
+  const resp = await fetch(`${env.kimiOpenUrl}${path}`, {
+    ...init,
+    headers: {
+      Accept: "application/json",
+      Authorization: `Bearer ${token}`,
+      ...init?.headers,
+    },
+  });
+  if (!resp.ok) {
+    const text = await resp.text();
+    console.warn(
+      `[kimi] Request to ${path} failed (${resp.status}): ${text}`,
+    );
+    return null;
   }
-  return value ?? "";
+  return resp.json() as Promise<T>;
 }
 
-export const env = {
-  appId: required("APP_ID"),
-  appSecret: required("APP_SECRET"),
-  isProduction: process.env.NODE_ENV === "production",
-  databaseUrl: required("DATABASE_URL"),
-  kimiAuthUrl: required("KIMI_AUTH_URL"),
-  kimiOpenUrl: required("KIMI_OPEN_URL"),
-  ownerUnionId: process.env.OWNER_UNION_ID ?? "",
+export const users = {
+  getProfile: (token: string) =>
+    kimiRequest<UserProfile>("/v1/users/me/profile", token),
 };

@@ -1,66 +1,42 @@
-import { z } from "zod";
-import { eq } from "drizzle-orm";
-import { createRouter, authedQuery } from "./middleware";
-import { getDb } from "./queries/connection";
-import { telegramUsers } from "../db/schema";
+#root {
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 2rem;
+  text-align: center;
+}
 
-export const telegramRouter = createRouter({
-  getSettings: authedQuery.query(async ({ ctx }) => {
-    const db = getDb();
-    const [settings] = await db
-      .select()
-      .from(telegramUsers)
-      .where(eq(telegramUsers.userId, ctx.user.id));
-    return settings || null;
-  }),
+.logo {
+  height: 6em;
+  padding: 1.5em;
+  will-change: filter;
+  transition: filter 300ms;
+}
+.logo:hover {
+  filter: drop-shadow(0 0 2em #646cffaa);
+}
+.logo.react:hover {
+  filter: drop-shadow(0 0 2em #61dafbaa);
+}
 
-  saveSettings: authedQuery
-    .input(
-      z.object({
-        telegramId: z.number().positive(),
-        telegramUsername: z.string().optional(),
-        botToken: z.string().regex(/^\d+:[A-Za-z0-9_-]+$/).min(10),
-      })
-    )
-    .mutation(async ({ ctx, input }) => {
-      const db = getDb();
-      const [existing] = await db
-        .select()
-        .from(telegramUsers)
-        .where(eq(telegramUsers.userId, ctx.user.id));
+@keyframes logo-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
 
-      if (existing) {
-        await db
-          .update(telegramUsers)
-          .set({
-            telegramId: input.telegramId,
-            telegramUsername: input.telegramUsername,
-            botToken: input.botToken,
-          })
-          .where(eq(telegramUsers.id, existing.id));
-        const [updated] = await db
-          .select()
-          .from(telegramUsers)
-          .where(eq(telegramUsers.id, existing.id));
-        return updated;
-      } else {
-        const [created] = await db
-          .insert(telegramUsers)
-          .values({
-            userId: ctx.user.id,
-            telegramId: input.telegramId,
-            telegramUsername: input.telegramUsername,
-            botToken: input.botToken,
-          });
-        return created;
-      }
-    }),
+@media (prefers-reduced-motion: no-preference) {
+  a:nth-of-type(2) .logo {
+    animation: logo-spin infinite 20s linear;
+  }
+}
 
-  deleteSettings: authedQuery.mutation(async ({ ctx }) => {
-    const db = getDb();
-    await db
-      .delete(telegramUsers)
-      .where(eq(telegramUsers.userId, ctx.user.id));
-    return { success: true };
-  }),
-});
+.card {
+  padding: 2em;
+}
+
+.read-the-docs {
+  color: #888;
+}

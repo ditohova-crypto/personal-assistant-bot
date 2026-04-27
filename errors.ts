@@ -1,15 +1,22 @@
-type AppError = { tag: "app_error"; status: number; message: string };
+import * as cookie from "cookie";
+import { Session } from "@contracts/constants";
+import { getSessionCookieOptions } from "./lib/cookies";
+import { createRouter, authedQuery } from "./middleware";
 
-function appError(status: number, message: string): AppError {
-  return { tag: "app_error", status, message };
-}
-
-export const Errors = {
-  badRequest: (msg: string) => appError(400, msg),
-  unauthorized: (msg: string) => appError(401, msg),
-  forbidden: (msg: string) => appError(403, msg),
-  notFound: (msg: string) => appError(404, msg),
-  internal: (msg: string) => appError(500, msg),
-} as const;
-
-export type { AppError };
+export const authRouter = createRouter({
+  me: authedQuery.query((opts) => opts.ctx.user),
+  logout: authedQuery.mutation(async ({ ctx }) => {
+    const opts = getSessionCookieOptions(ctx.req.headers);
+    ctx.resHeaders.append(
+      "set-cookie",
+      cookie.serialize(Session.cookieName, "", {
+        httpOnly: opts.httpOnly,
+        path: opts.path,
+        sameSite: opts.sameSite?.toLowerCase() as "lax" | "none",
+        secure: opts.secure,
+        maxAge: 0,
+      }),
+    );
+    return { success: true };
+  }),
+});
